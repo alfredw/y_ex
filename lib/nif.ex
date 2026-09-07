@@ -2,24 +2,14 @@ defmodule Yex.Nif do
   @moduledoc false
   # Do not use directly
 
-  version = Mix.Project.config()[:version]
-
-  force_build =
-    if System.get_env("RUSTLER_PRECOMPILATION_YEX_BUILD") != nil do
-      [force_build: System.get_env("RUSTLER_PRECOMPILATION_YEX_BUILD") in ["1", "true"]]
-    else
-      []
-    end
-
-  use RustlerPrecompiled,
-      [
-        otp_app: :y_ex,
-        crate: "yex",
-        base_url: "https://github.com/satoren/y_ex/releases/download/v#{version}",
-        version: version
-      ] ++ force_build
+  @on_load :load_schema_candidate
+  def load_schema_candidate do
+    :erlang.load_nif(System.fetch_env!("NERV_SCHEMA_NATIVE") |> String.to_charlist(), 0)
+  end
 
   def doc_new(), do: :erlang.nif_error(:nif_not_loaded)
+  def inspect_update(_update, _v2), do: :erlang.nif_error(:nif_not_loaded)
+  def inspect_document(_doc), do: :erlang.nif_error(:nif_not_loaded)
   def doc_with_options(_option), do: :erlang.nif_error(:nif_not_loaded)
   def doc_get_or_insert_text(_doc, _name), do: :erlang.nif_error(:nif_not_loaded)
   def doc_get_or_insert_array(_doc, _name), do: :erlang.nif_error(:nif_not_loaded)
