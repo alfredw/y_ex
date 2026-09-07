@@ -432,7 +432,7 @@ fn encode_state_as_update_v1<'a>(
         StateVector::default()
     };
 
-    doc.readonly(current_transaction, |txn| Ok(txn.encode_diff_v1(&sv)))
+    doc.readonly(current_transaction, |txn| Ok(txn.encode_state_as_update_v1(&sv)))
         .map(|vec| (atoms::ok(), SliceIntoBinary::new(vec.as_slice())).encode(env))
 }
 
@@ -482,7 +482,7 @@ fn encode_state_as_update_v2<'a>(
         StateVector::default()
     };
 
-    let vec = doc.readonly(current_transaction, |txn| Ok(txn.encode_diff_v2(&sv)))?;
+    let vec = doc.readonly(current_transaction, |txn| Ok(txn.encode_state_as_update_v2(&sv)))?;
 
     Ok((atoms::ok(), SliceIntoBinary::new(vec.as_slice())).encode(env))
 }
