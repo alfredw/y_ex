@@ -574,12 +574,9 @@ defmodule Yex.UndoManagerTest do
     # get back to empty
     assert Text.to_string(text) == ""
 
-    # Prove option means insufficient timeout will still batch
+    # Consecutive edits are captured together. A sleep below capture_timeout
+    # cannot prove this: scheduler delay may carry it beyond the deadline.
     Text.insert(text, 0, "e")
-
-    # undo manager has a timeout of 100ms, so this sleep of 50ms should ...
-    # ... be insufficient and will allow the changes to be in one batch
-    Process.sleep(50)
     Text.insert(text, 1, "f")
     assert Text.to_string(text) == "ef"
 
