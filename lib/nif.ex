@@ -2,10 +2,9 @@ defmodule Yex.Nif do
   @moduledoc false
   # Do not use directly
 
-  @on_load :load_schema_candidate
-  def load_schema_candidate do
-    :erlang.load_nif(System.fetch_env!("NERV_SCHEMA_NATIVE") |> String.to_charlist(), 0)
-  end
+  # The fork adds NIFs absent from upstream binaries. Always compile its source
+  # and load the artifact from this application's priv directory.
+  use Rustler, otp_app: :y_ex, crate: "yex"
 
   def doc_new(), do: :erlang.nif_error(:nif_not_loaded)
   def inspect_update(_update, _v2), do: :erlang.nif_error(:nif_not_loaded)

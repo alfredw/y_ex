@@ -1,0 +1,36 @@
+name: Nerv native packaging
+
+on:
+  pull_request:
+    branches: [nerv/schema-inspection]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  packaging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MIX_ENV: test
+      # Meck 0.9.2 is an inherited fork-test dependency, not a Nerv dependency.
+      ERL_COMPILER_OPTIONS: "[nowarn_deprecated_catch]"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.20.3"
+          otp-version: "29.0"
+      - run: rustup toolchain install 1.93.0 --profile minimal
+      - uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+            native/yex/target
+            priv/native
+          key: yex-v1-${{ runner.os }}-${{ runner.arch }}-otp29-elixir1.20.3-${{ hashFiles('rust-toolchain.toml', 'mix.lock', 'mix.exs', 'lib/**', 'native/yex/Cargo.*', 'native/yex/src/**') }}
+      - run: mix deps.get
+      - run: mix test
+      - run: git diff --exit-code -- native/yex/Cargo.lock
