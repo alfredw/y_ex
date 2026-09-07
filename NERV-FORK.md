@@ -1,32 +1,53 @@
-# Nerv reference fork
+# Nerv Yex fork
 
-Branch `nerv/schema-inspection` starts at upstream `v0.10.5`
-(`b58458099f0f243bf1890f88ae802c9866b3bc75`). It preserves the Yex patch from
-Nerv's `reference/gh-11-durable-ledger` native-schema fixture:
+This fork starts at upstream Yex `v0.10.5` and preserves the native changes
+validated at `31c3118711d6c8e2636c6e3d0591f20e35a58ca9`:
 
-- Versioned update/document inspection NIFs, with complete-input decoding.
-- State export that retains pending updates in both Yjs wire encodings.
-- The explicit `NERV_SCHEMA_NATIVE` loader used by the isolated reference worker.
+- Versioned update/document inspection with complete-input decoding.
+- State export retaining pending updates in both Yjs wire encodings.
+- Yrs 0.25.0 pinned to `cd23b69ebbc42ba56febce32d9ef2731e0a3eae4`
+  in `native/yex/Cargo.toml` and `Cargo.lock`.
 
-Yrs is pinned to `alfredw/y-crdt` at the full revision in
-`native/yex/Cargo.toml` and `Cargo.lock`. No sibling checkout or patch application
-is needed. Build with Rust 1.93 and the locked Cargo dependencies:
+## Mix packaging
+
+Install Rust 1.93.0 (the checked-in rust-toolchain.toml selects it), then:
 
 ```sh
-cargo build --release --locked --manifest-path native/yex/Cargo.toml
+mix deps.get
+mix compile
+mix test test/nerv_packaging_test.exs
 ```
 
-This branch retains the reference loader intentionally. It requires a built NIF
-and `NERV_SCHEMA_NATIVE` set to its absolute path without the library extension;
-it does not download upstream precompiled binaries. Nerv's native-schema build
-script compiles the Elixir bindings and installs the NIF for its child worker.
-This is not yet a normal Mix dependency or production packaging decision.
+`Yex.Nif` uses Rustler 0.37.1 to build the native source in every environment.
+Rustler 0.37.0 is retired for a non-workspace build defect. There is no upstream
+precompiled-binary download or fallback. The resulting NIF lives under the Yex
+application's `priv/native` directory and loads relative to that application.
+Neither `NERV_SCHEMA_NATIVE` nor manual copying of BEAM files is required.
+The dependency must be pinned by full Git revision when consumed by Nerv.
 
-Integration, malformed-input, recovery, and anchor tests live in
-https://github.com/alfredw/kaizen-studio/tree/reference/gh-11-durable-ledger/scripts/native_schema.
-Nerv retains child-process isolation; these patches are not a full hostile-input audit.
+The existing fork test dependency Meck 0.9.2 needs
+`ERL_COMPILER_OPTIONS='[nowarn_deprecated_catch]'` when compiling on OTP 29.
+This affects fork tests only; consumers do not install Meck.
 
-Upstream: https://github.com/satoren/y_ex. Keep `upstream` configured locally.
-Review upstream changes on this branch, rerun integration tests, and update
-downstream full commit pins only after verification. Never fetch baseline release
-NIFs for this modified binding.
+The packaging tests exercise the added inspection APIs, a relocated application,
+and explicit failure when its native artifact is missing. Existing document,
+text and sticky-index tests exercise the unchanged binding. Native implementation
+and Cargo lockfile changes are outside this packaging change.
+
+## Runtime boundary
+
+Yex is a NIF binding: native operations execute inside the BEAM that loads it.
+Nerv's document processing must load it only in application-owned child BEAMs.
+Mix packaging does not establish crash containment or a production worker launcher.
+The native patches are not a complete hostile-input audit.
+
+The original `nerv/schema-inspection` reference commits remain reproducible with
+their historical explicit loader. This packaging revision supersedes that loader;
+it is not a drop-in replacement for scripts that compile the bindings manually.
+
+## Maintenance
+
+Keep upstream history and review changes explicitly. Update and verify Yrs first,
+then advance Yex's manifest and Cargo lock pin, test the binding and Nerv's isolated
+integration, and finally advance Nerv's Git pin. Never use baseline release NIFs
+with the modified binding. Upstream: https://github.com/satoren/y_ex.
