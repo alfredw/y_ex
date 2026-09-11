@@ -557,8 +557,10 @@ fn encode_state_as_update_v1<'a>(
         StateVector::default()
     };
 
-    doc.readonly(current_transaction, |txn| Ok(txn.encode_state_as_update_v1(&sv)))
-        .map(|vec| (atoms::ok(), SliceIntoBinary::new(vec.as_slice())).encode(env))
+    doc.readonly(current_transaction, |txn| {
+        Ok(txn.encode_state_as_update_v1(&sv))
+    })
+    .map(|vec| (atoms::ok(), SliceIntoBinary::new(vec.as_slice())).encode(env))
 }
 
 /// Single read transaction for sync step1 response: missing diff vs remote SV + local encoded SV.
@@ -607,7 +609,9 @@ fn encode_state_as_update_v2<'a>(
         StateVector::default()
     };
 
-    let vec = doc.readonly(current_transaction, |txn| Ok(txn.encode_state_as_update_v2(&sv)))?;
+    let vec = doc.readonly(current_transaction, |txn| {
+        Ok(txn.encode_state_as_update_v2(&sv))
+    })?;
 
     Ok((atoms::ok(), SliceIntoBinary::new(vec.as_slice())).encode(env))
 }
