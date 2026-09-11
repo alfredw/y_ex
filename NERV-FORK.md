@@ -1,12 +1,26 @@
 # Nerv Yex fork
 
-This fork starts at upstream Yex `v0.10.5` and preserves the native changes
-validated at `31c3118711d6c8e2636c6e3d0591f20e35a58ca9`:
+This fork is based on upstream Yex `v0.11.0`
+(`b9b06c9287e4048d3d61bed9386896a242f9e906`, rebased 2026-09-12 from the
+`v0.10.5` base) and preserves the native changes first validated at
+`31c3118711d6c8e2636c6e3d0591f20e35a58ca9`:
 
 - Versioned update/document inspection with complete-input decoding.
 - State export retaining pending updates in both Yjs wire encodings.
 - Yrs 0.25.0 pinned to `cd23b69ebbc42ba56febce32d9ef2731e0a3eae4`
   in `native/yex/Cargo.toml` and `Cargo.lock`.
+
+## Upstream v0.11.0 and the pending-state patch
+
+Upstream v0.11.0 adds `get_pending_update_v1/2` and `get_pending_ds_v1/2`,
+which expose a document's pending update and pending delete set for reading.
+Its `encode_state_as_update_v1/2` still call Yrs `encode_diff_v1/v2`, which
+drop pending data, so the fork's two-line export patch stays: exports from the
+patched functions retain pending updates in both wire encodings. Nerv's
+deferral path already reads the pending field of `inspect_document/1`;
+`get_pending_update_v1` may later feed writer repair in the application pass.
+The undo-manager capture test the fork had fixed was fixed upstream in the same
+way, so that fork commit is dropped.
 
 ## Mix packaging
 

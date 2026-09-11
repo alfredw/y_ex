@@ -1,7 +1,7 @@
 defmodule Yex.MixProject do
   use Mix.Project
 
-  @version "0.10.5"
+  @version "0.11.0"
   @repo "https://github.com/satoren/y_ex"
 
   @description """
@@ -20,8 +20,13 @@ defmodule Yex.MixProject do
       deps: deps(),
       source_url: @repo,
       homepage_url: @repo,
-      test_coverage: [tool: ExCoveralls],
-      preferred_cli_env: [
+      test_coverage: [tool: ExCoveralls]
+    ]
+  end
+
+  def cli do
+    [
+      preferred_envs: [
         coveralls: :test,
         "coveralls.lcov": :test,
         "coveralls.detail": :test,
@@ -61,12 +66,11 @@ defmodule Yex.MixProject do
   defp deps do
     [
       {:rustler, "0.37.1", runtime: false},
-      {:ex_doc, "~> 0.38", only: :dev, runtime: false},
+      {:ex_doc, "~> 0.40", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:excoveralls, "~> 0.18", only: :test},
-      {:benchee, "~> 1.0", only: :dev},
-      {:mock, "~> 0.3.0", only: :test}
+      {:benchee, "~> 1.0", only: :dev}
     ]
   end
 end

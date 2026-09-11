@@ -1,12 +1,17 @@
+use std::collections::{HashMap, HashSet};
 // Standard library imports
 use std::ops::Deref;
 use std::sync::{Mutex, RwLock};
 
 // External crates
 use rustler::{
-    Atom, Binary, Encoder, Env, LocalPid, NifResult, NifStruct, NifUnitEnum, ResourceArc, Term,
+    Atom, Binary, Decoder, Encoder, Env, LocalPid, NifResult, NifStruct, NifUnitEnum, ResourceArc,
+    Term,
 };
-use yrs::updates::{decoder::Decode, encoder::Encode};
+use yrs::updates::{
+    decoder::Decode,
+    encoder::{Encode, Encoder as UpdatesEncoder, EncoderV1, EncoderV2},
+};
 use yrs::*;
 
 use crate::event::NifSubdocsEvent;
@@ -18,12 +23,56 @@ use crate::{
     term_box::TermBox,
     transaction::{ReadTransaction, TransactionResource},
     utils::{origin_to_term, term_to_origin_binary},
-    wrap::{NifWrap, SliceIntoBinary},
+    wrap::SliceIntoBinary,
     xml::NifXmlFragment,
+    youtput::NifYOut,
     NifArray, NifMap, NifText, ENV,
 };
 
-pub type DocResource = NifWrap<Doc>;
+pub(crate) struct DocResource {
+    pub(crate) doc: Doc,
+    pub(crate) subdocs: Mutex<HashMap<String, ResourceArc<DocResource>>>,
+}
+
+impl std::ops::Deref for DocResource {
+    type Target = Doc;
+
+    fn deref(&self) -> &Self::Target {
+        &self.doc
+    }
+}
+
+impl std::panic::RefUnwindSafe for DocResource {}
+
+pub struct SnapshotRef(pub Snapshot);
+
+impl SnapshotRef {
+    pub fn new(v: Snapshot) -> Self {
+        Self(v)
+    }
+}
+
+impl Encoder for SnapshotRef {
+    fn encode<'b>(&self, env: Env<'b>) -> Term<'b> {
+        let encoded = self.0.encode_v1();
+        SliceIntoBinary::new(encoded.as_slice()).encode(env)
+    }
+}
+
+impl<'a> Decoder<'a> for SnapshotRef {
+    fn decode(term: Term<'a>) -> NifResult<Self> {
+        let bin = term.decode_as_binary()?;
+        let snapshot = Snapshot::decode_v1(bin.as_slice()).map_err(Error::from)?;
+        Ok(SnapshotRef::new(snapshot))
+    }
+}
+
+#[derive(NifStruct)]
+#[module = "Yex.Snapshot"]
+pub struct NifSnapshot {
+    pub doc: NifDoc,
+    pub reference: SnapshotRef,
+}
 
 #[rustler::resource_impl]
 impl rustler::Resource for DocResource {}
@@ -113,7 +162,10 @@ pub(crate) struct NifDoc {
 impl Default for NifDoc {
     fn default() -> Self {
         NifDoc {
-            reference: ResourceArc::new(Doc::new().into()),
+            reference: ResourceArc::new(DocResource {
+                doc: Doc::new(),
+                subdocs: Mutex::new(HashMap::new()),
+            }),
             worker_pid: None,
         }
     }
@@ -121,14 +173,75 @@ impl Default for NifDoc {
 impl NifDoc {
     pub fn with_options(option: NifOptions) -> Self {
         NifDoc {
-            reference: ResourceArc::new(Doc::with_options(option.into()).into()),
+            reference: ResourceArc::new(DocResource {
+                doc: Doc::with_options(option.into()),
+                subdocs: Mutex::new(HashMap::new()),
+            }),
             worker_pid: None,
         }
     }
-    pub fn with_worker_pid(doc: Doc, worker_pid: Option<LocalPid>) -> Self {
+
+    fn prune_subdoc_cache(
+        &self,
+        cache: &mut HashMap<String, ResourceArc<DocResource>>,
+        keep_guid: &str,
+        active_subdoc_guids: Option<&HashSet<String>>,
+    ) {
+        if let Some(active_guids) = active_subdoc_guids {
+            cache.retain(|guid, _| guid == keep_guid || active_guids.contains(guid));
+        }
+    }
+
+    fn cached_subdoc_reference(
+        &self,
+        subdoc: Doc,
+        cache_on_miss: bool,
+        active_subdoc_guids: Option<&HashSet<String>>,
+    ) -> ResourceArc<DocResource> {
+        let subdoc_guid = subdoc.guid().to_string();
+
+        if let Ok(mut cache) = self.reference.subdocs.lock() {
+            self.prune_subdoc_cache(&mut cache, &subdoc_guid, active_subdoc_guids);
+
+            if let Some(reference) = cache.get(&subdoc_guid) {
+                return reference.clone();
+            }
+
+            let reference: ResourceArc<DocResource> = ResourceArc::new(DocResource {
+                doc: subdoc,
+                subdocs: Mutex::new(HashMap::new()),
+            });
+            if cache_on_miss {
+                cache.insert(subdoc_guid, reference.clone());
+            }
+            reference
+        } else {
+            ResourceArc::new(DocResource {
+                doc: subdoc,
+                subdocs: Mutex::new(HashMap::new()),
+            })
+        }
+    }
+
+    pub fn with_cached_subdoc(
+        &self,
+        subdoc: Doc,
+        active_subdoc_guids: Option<&HashSet<String>>,
+    ) -> Self {
         NifDoc {
-            reference: ResourceArc::new(doc.into()),
-            worker_pid,
+            reference: self.cached_subdoc_reference(subdoc, true, active_subdoc_guids),
+            worker_pid: self.worker_pid,
+        }
+    }
+
+    pub fn with_subdoc_reference(
+        &self,
+        subdoc: Doc,
+        active_subdoc_guids: Option<&HashSet<String>>,
+    ) -> Self {
+        NifDoc {
+            reference: self.cached_subdoc_reference(subdoc, false, active_subdoc_guids),
+            worker_pid: self.worker_pid,
         }
     }
 
@@ -202,7 +315,7 @@ impl Deref for NifDoc {
     type Target = Doc;
 
     fn deref(&self) -> &Self::Target {
-        &self.reference.0
+        &self.reference.doc
     }
 }
 
@@ -221,7 +334,7 @@ impl DocOperations for NifDoc {
     where
         F: FnOnce(&Transaction) -> NifResult<T>,
     {
-        let txn = yrs::Transact::try_transact(&self.reference.0).map_err(Error::from)?;
+        let txn = yrs::Transact::try_transact(&self.reference.doc).map_err(Error::from)?;
         f(&txn)
     }
 
@@ -229,7 +342,7 @@ impl DocOperations for NifDoc {
     where
         F: FnOnce(&mut TransactionMut) -> NifResult<T>,
     {
-        let mut txn = yrs::Transact::try_transact_mut(&self.reference.0).map_err(Error::from)?;
+        let mut txn = yrs::Transact::try_transact_mut(&self.reference.doc).map_err(Error::from)?;
         f(&mut txn)
     }
 }
@@ -271,14 +384,14 @@ fn doc_begin_transaction(
 ) -> NifResult<ResourceArc<TransactionResource>> {
     if let Some(origin) = term_to_origin_binary(origin) {
         let txn: TransactionMut =
-            yrs::Transact::try_transact_mut_with(&doc.reference.0, origin.as_slice())
+            yrs::Transact::try_transact_mut_with(&doc.reference.doc, origin.as_slice())
                 .map_err(Error::from)?;
         let txn: TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
 
         Ok(TransactionResource(RwLock::new(Some(txn))).into())
     } else {
         let txn: TransactionMut =
-            yrs::Transact::try_transact_mut(&doc.reference.0).map_err(Error::from)?;
+            yrs::Transact::try_transact_mut(&doc.reference.doc).map_err(Error::from)?;
         let txn: TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
         Ok(TransactionResource(RwLock::new(Some(txn))).into())
     }
@@ -408,6 +521,18 @@ fn merge_updates_v2<'a>(env: Env<'a>, updates: Vec<Binary<'a>>) -> NifResult<Ter
 }
 
 #[rustler::nif]
+fn update_debug_v1<'a>(env: Env<'a>, update: Binary<'a>) -> NifResult<Term<'a>> {
+    let update = Update::decode_v1(update.as_slice()).map_err(Error::from)?;
+    Ok((atoms::ok(), format!("{:#?}", update)).encode(env))
+}
+
+#[rustler::nif]
+fn update_debug_v2<'a>(env: Env<'a>, update: Binary<'a>) -> NifResult<Term<'a>> {
+    let update = Update::decode_v2(update.as_slice()).map_err(Error::from)?;
+    Ok((atoms::ok(), format!("{:#?}", update)).encode(env))
+}
+
+#[rustler::nif]
 fn encode_state_vector_v1(
     env: Env<'_>,
     doc: NifDoc,
@@ -432,8 +557,10 @@ fn encode_state_as_update_v1<'a>(
         StateVector::default()
     };
 
-    doc.readonly(current_transaction, |txn| Ok(txn.encode_state_as_update_v1(&sv)))
-        .map(|vec| (atoms::ok(), SliceIntoBinary::new(vec.as_slice())).encode(env))
+    doc.readonly(current_transaction, |txn| {
+        Ok(txn.encode_state_as_update_v1(&sv))
+    })
+    .map(|vec| (atoms::ok(), SliceIntoBinary::new(vec.as_slice())).encode(env))
 }
 
 /// Single read transaction for sync step1 response: missing diff vs remote SV + local encoded SV.
@@ -482,9 +609,116 @@ fn encode_state_as_update_v2<'a>(
         StateVector::default()
     };
 
-    let vec = doc.readonly(current_transaction, |txn| Ok(txn.encode_state_as_update_v2(&sv)))?;
+    let vec = doc.readonly(current_transaction, |txn| {
+        Ok(txn.encode_state_as_update_v2(&sv))
+    })?;
 
     Ok((atoms::ok(), SliceIntoBinary::new(vec.as_slice())).encode(env))
+}
+
+#[rustler::nif]
+fn get_pending_update_v1<'a>(
+    env: Env<'a>,
+    doc: NifDoc,
+    current_transaction: Option<ResourceArc<TransactionResource>>,
+) -> NifResult<Term<'a>> {
+    doc.readonly(current_transaction, |txn| {
+        let result = txn.store().pending_update().map(|p| {
+            let bytes = p.update.encode_v1();
+            SliceIntoBinary::new(bytes.as_slice()).encode(env)
+        });
+        Ok((atoms::ok(), result).encode(env))
+    })
+}
+
+#[rustler::nif]
+fn get_pending_ds_v1<'a>(
+    env: Env<'a>,
+    doc: NifDoc,
+    current_transaction: Option<ResourceArc<TransactionResource>>,
+) -> NifResult<Term<'a>> {
+    doc.readonly(current_transaction, |txn| {
+        let result = txn.store().pending_ds().map(|ds| {
+            let bytes = ds.encode_v1();
+            SliceIntoBinary::new(bytes.as_slice()).encode(env)
+        });
+        Ok((atoms::ok(), result).encode(env))
+    })
+}
+
+#[rustler::nif]
+fn transaction_snapshot<'a>(
+    env: Env<'a>,
+    doc: NifDoc,
+    current_transaction: Option<ResourceArc<TransactionResource>>,
+) -> NifResult<Term<'a>> {
+    let snapshot = doc.readonly(current_transaction, |txn| Ok(txn.snapshot()))?;
+
+    Ok((
+        atoms::ok(),
+        NifSnapshot {
+            doc,
+            reference: SnapshotRef::new(snapshot),
+        },
+    )
+        .encode(env))
+}
+
+#[rustler::nif]
+fn transaction_encode_state_from_snapshot_v1<'a>(
+    env: Env<'a>,
+    current_transaction: Option<ResourceArc<TransactionResource>>,
+    snapshot: NifSnapshot,
+) -> NifResult<Term<'a>> {
+    let update: Vec<u8> = snapshot.doc.readonly(current_transaction, |txn| {
+        let mut encoder = EncoderV1::new();
+        txn.encode_state_from_snapshot(&snapshot.reference.0, &mut encoder)
+            .map_err(|e| {
+                rustler::Error::Term(Box::new((atoms::encoding_exception(), e.to_string())))
+            })?;
+        Ok(encoder.to_vec())
+    })?;
+
+    Ok((atoms::ok(), SliceIntoBinary::new(update.as_slice())).encode(env))
+}
+
+#[rustler::nif]
+fn transaction_encode_state_from_snapshot_v2<'a>(
+    env: Env<'a>,
+    current_transaction: Option<ResourceArc<TransactionResource>>,
+    snapshot: NifSnapshot,
+) -> NifResult<Term<'a>> {
+    let update: Vec<u8> = snapshot.doc.readonly(current_transaction, |txn| {
+        let mut encoder = EncoderV2::new();
+        txn.encode_state_from_snapshot(&snapshot.reference.0, &mut encoder)
+            .map_err(|e| {
+                rustler::Error::Term(Box::new((atoms::encoding_exception(), e.to_string())))
+            })?;
+        Ok(encoder.to_vec())
+    })?;
+
+    Ok((atoms::ok(), SliceIntoBinary::new(update.as_slice())).encode(env))
+}
+
+#[rustler::nif]
+fn transaction_json_path_all<'a>(
+    env: Env<'a>,
+    doc: NifDoc,
+    current_transaction: Option<ResourceArc<TransactionResource>>,
+    path: &str,
+) -> NifResult<Term<'a>> {
+    let query = JsonPath::parse(path)
+        .map_err(|e| rustler::Error::Term(Box::new((atoms::invalid_json_path(), e.to_string()))))?;
+
+    let values = doc.readonly(current_transaction, |txn| {
+        let values = txn
+            .json_path(&query)
+            .map(|out| NifYOut::from_native(out, doc.clone()))
+            .collect::<Vec<NifYOut>>();
+        Ok(values)
+    })?;
+
+    Ok((atoms::ok(), values).encode(env))
 }
 
 #[rustler::nif]
@@ -494,10 +728,12 @@ fn doc_monitor_subdocs(
     metadata: Term<'_>,
 ) -> NifResult<(Atom, NifSubscription)> {
     let metadata = TermBox::new(metadata);
-    let worker_pid = doc.worker_pid;
+    let event_doc = doc.clone();
     doc.observe_subdocs(move |txn, event: &SubdocsEvent| {
         ENV.with(|env| {
-            let event = NifSubdocsEvent::new(event, worker_pid);
+            let active_subdoc_guids: HashSet<String> =
+                txn.subdoc_guids().map(|guid| guid.to_string()).collect();
+            let event = NifSubdocsEvent::new(event, &event_doc, &active_subdoc_guids);
             let metadata = metadata.get(*env);
             let _ = env.send(
                 &pid,

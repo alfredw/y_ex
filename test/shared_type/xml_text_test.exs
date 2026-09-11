@@ -1,5 +1,5 @@
 defmodule YexXmlTextTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
   alias Yex.{Doc, XmlFragment, XmlText, XmlTextPrelim, SharedType}
   doctest XmlText
   doctest XmlTextPrelim
@@ -121,6 +121,30 @@ defmodule YexXmlTextTest do
 
       assert [%{insert: "1"}, %{insert: "234", attributes: %{"bold" => true}}, %{insert: "56"}] ==
                XmlText.to_delta(text)
+    end
+
+    test "insert_embed", %{xml_text: text} do
+      XmlText.insert(text, 0, "abcd")
+      embed = XmlText.quote(text, 1, 2)
+
+      assert :ok == XmlText.insert_embed(text, 4, embed)
+
+      assert Enum.any?(XmlText.to_delta(text), fn
+               %{insert: %Yex.WeakLink{}} -> true
+               _ -> false
+             end)
+    end
+
+    test "insert_embed with attributes", %{xml_text: text} do
+      XmlText.insert(text, 0, "abcd")
+      embed = XmlText.quote(text, 1, 2)
+
+      assert :ok == XmlText.insert_embed(text, 4, embed, %{"bold" => true})
+
+      assert Enum.any?(XmlText.to_delta(text), fn
+               %{insert: %Yex.WeakLink{}, attributes: %{"bold" => true}} -> true
+               _ -> false
+             end)
     end
 
     test "next_sibling", %{xml_text: text, xml_fragment: xml_fragment} do

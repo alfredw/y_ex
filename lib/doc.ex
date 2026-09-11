@@ -178,6 +178,47 @@ defmodule Yex.Doc do
   end
 
   @doc """
+  Evaluates a JSONPath expression against the current document state.
+
+  Returns all matched values as a list. The path grammar follows yrs JSONPath
+  support (for example: `$.users[*].name`, `$.users..nick`).
+  """
+  @spec json_path(t, binary()) :: {:ok, list()} | {:error, term()}
+  def json_path(%__MODULE__{} = doc, path) when is_binary(path) do
+    run_in_worker_process doc do
+      Yex.Nif.transaction_json_path_all(doc, cur_txn(doc), path)
+    end
+  end
+
+  @doc """
+  Returns the pending update (v1 encoded) for the document, if any.
+
+  A pending update accumulates operations that arrived out of order and
+  could not yet be applied because their causal predecessors are missing.
+  Returns `{:ok, binary()}` when a pending update exists, `{:ok, nil}` otherwise.
+  """
+  @spec get_pending_update(t) :: {:ok, binary() | nil} | {:error, term()}
+  def get_pending_update(%__MODULE__{} = doc) do
+    run_in_worker_process doc do
+      Yex.Nif.get_pending_update_v1(doc, cur_txn(doc))
+    end
+  end
+
+  @doc """
+  Returns the pending delete set (v1 encoded) for the document, if any.
+
+  A pending delete set holds deletions that arrived out of order and could
+  not yet be applied. Returns `{:ok, binary()}` when a pending delete set
+  exists, `{:ok, nil}` otherwise.
+  """
+  @spec get_pending_ds(t) :: {:ok, binary() | nil} | {:error, term()}
+  def get_pending_ds(%__MODULE__{} = doc) do
+    run_in_worker_process doc do
+      Yex.Nif.get_pending_ds_v1(doc, cur_txn(doc))
+    end
+  end
+
+  @doc """
   Start a transaction.
 
   Raises RuntimeError if a transaction is already in progress.
@@ -191,7 +232,7 @@ defmodule Yex.Doc do
       iex>   Text.insert(text, 0, "Hello", %{"bold" => true})
       iex> end)
       iex> assert_receive {:update_v1, _, nil, _}
-      iex> refute_receive {:update_v1, _, nil, _} # only one update message
+      iex> refute_receive {:update_v1, _, nil, _}, 10 # only one update message
 
   """
   @spec transaction(t, origin :: term(), fun()) :: term()

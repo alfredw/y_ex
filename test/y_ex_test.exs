@@ -1,6 +1,5 @@
 defmodule YexTest do
-  use ExUnit.Case
-  import Mock
+  use ExUnit.Case, async: true
   doctest Yex
 
   describe "apply_update" do
@@ -75,6 +74,34 @@ defmodule YexTest do
     end
   end
 
+  describe "update_debug" do
+    test "update_debug_v1" do
+      doc = Yex.Doc.new()
+      text = Yex.Doc.get_text(doc, "text")
+      Yex.Text.insert(text, 0, "Hello")
+
+      {:ok, update} = Yex.encode_state_as_update_v1(doc)
+      {:ok, debug} = Yex.update_debug_v1(update)
+
+      assert is_binary(debug)
+      assert String.length(debug) > 0
+      assert {:error, {:encoding_exception, _}} = Yex.update_debug_v1(<<1, 2, 3>>)
+    end
+
+    test "update_debug_v2" do
+      doc = Yex.Doc.new()
+      text = Yex.Doc.get_text(doc, "text")
+      Yex.Text.insert(text, 0, "Hello")
+
+      {:ok, update} = Yex.encode_state_as_update_v2(doc)
+      {:ok, debug} = Yex.update_debug_v2(update)
+
+      assert is_binary(debug)
+      assert String.length(debug) > 0
+      assert {:error, {:encoding_exception, _}} = Yex.update_debug_v2(<<1, 2, 3>>)
+    end
+  end
+
   describe "encode_state_as_update" do
     test "encode_state_as_update" do
       doc = Yex.Doc.new()
@@ -106,15 +133,6 @@ defmodule YexTest do
       assert diff == diff2
       assert sv == sv2
     end
-
-    test "encode_state_as_update! raise error" do
-      doc = Yex.Doc.new()
-
-      with_mock Yex.Nif,
-        encode_state_as_update_v1: fn _, _, _ -> {:error, :some_error} end do
-        assert_raise RuntimeError, fn -> Yex.encode_state_as_update!(doc) end
-      end
-    end
   end
 
   describe "encode_state_vector" do
@@ -131,15 +149,6 @@ defmodule YexTest do
     test "encode_state_vector_v2" do
       doc = Yex.Doc.new()
       {:ok, _binary} = Yex.encode_state_vector_v2(doc)
-    end
-
-    test "encode_state_vector! raise error" do
-      doc = Yex.Doc.new()
-
-      with_mock Yex.Nif,
-        encode_state_vector_v1: fn _, _ -> {:error, :some_error} end do
-        assert_raise RuntimeError, fn -> Yex.encode_state_vector!(doc) end
-      end
     end
   end
 end

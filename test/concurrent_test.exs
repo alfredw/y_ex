@@ -13,7 +13,7 @@ defmodule DocWorker do
 end
 
 defmodule Yex.DocConcurrentTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
   alias Yex.{Doc, Text, Map}
 
   setup do
@@ -32,8 +32,6 @@ defmodule Yex.DocConcurrentTest do
 
           Doc.transaction(doc, "origin", fn ->
             Text.insert(text1, 0, "World")
-
-            Process.sleep(1)
           end)
         end)
       end
@@ -51,7 +49,7 @@ defmodule Yex.DocConcurrentTest do
   describe "propagate errors to caller" do
     test "miss match key type", %{doc: doc} do
       map = Doc.get_map(doc, "map")
-      assert_raise FunctionClauseError, fn -> Map.set(map, 0, "Hello") end
+      assert_raise FunctionClauseError, fn -> apply(Map, :set, [map, 0, "Hello"]) end
     end
 
     test "Key not found", %{doc: doc} do
